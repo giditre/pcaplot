@@ -14,4 +14,6 @@ The required additional Python modules are listed in the file "requirements.txt"
 
 ### Usage
 
-The main script is "pcaplot.py" in the "tools" directory. To use it, modify its content so that it points to the correct input files (i.e., the .pcap files).
+The main script is "pcaplot.py" in the "tools" directory. To use it, please refer to its help function:
+
+> python3 pcaplot.py -h
