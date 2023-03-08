@@ -1,9 +1,64 @@
 import pathlib
+import argparse
+import json
 import sys
 
 import matplotlib.pyplot as plt
 import pandas as pd
 import scapy.all as scapy
+
+parser = argparse.ArgumentParser(description="Plot contents of capture files.", exit_on_error=False)
+parser.add_argument(
+    "-f",
+    "--capture-files",
+    help="Capture file name, as relative path w.r.t. this script or as absolute path, default: %(default)s",
+    # metavar="FILE_NAME",
+    nargs="+",
+    default=list(
+        str(p)
+        for p in pathlib.Path(__file__)
+        .parent.parent.joinpath("sample_pcap_files", "test01")
+        .glob("*.pcap")
+    ),
+)
+parser.add_argument(
+    "-o",
+    "--output-file",
+    help="Name of the output file, default: %(default)s",
+    nargs="?",
+    default=str(pathlib.Path(__file__).parent.joinpath("tmp_plot.pdf")),
+)
+parser.add_argument(
+    "-m",
+    "--metric",
+    help="Metric to plot on the y axis, default: %(default)s",
+    choices=["bps", "pps"],
+    nargs="?",
+    default="bps",
+)
+parser.add_argument(
+    "-n",
+    "--normalization",
+    help="Data normalization method, default: %(default)s",
+    choices=["none", "pseudo", "min-max", "z-score"],
+    nargs="?",
+    default="none",
+)
+parser.add_argument(
+    "--ip-proto",
+    help="Protocol of the IP payload to be considered, default: %(default)s",
+    choices=["tcp", "udp", "icmp"],
+    nargs="?",
+    default="tcp",
+)
+# TODO add args for IP source/destination, L4 ports, ...
+
+if len(sys.argv) > 1:
+    args = parser.parse_args()
+else:
+    args = parser.parse_args("-m pps --ip-proto udp".split())
+
+print(f"Parsed args: {json.dumps(vars(args), indent=4)}", end="\n\n")
 
 # define name for processed data file, useful for caching processed data
 # NOTE: if a file with this name is found, the pcap files will not be processed
@@ -14,12 +69,9 @@ if data_file.exists():
     with open(str(data_file), newline="") as f:
         overall_df = pd.read_csv(f, index_col="time")
 else:
-    # load pcap file as packet lists
+    # load pcap files as packet lists
     pcap_flows: dict[str, scapy.PacketList] = {
-        file_path.stem: scapy.rdpcap(str(file_path))
-        for file_path in pathlib.Path(__file__)
-        .parent.parent.joinpath("sample_pcap_files", "test01")
-        .glob("*.pcap")
+        pathlib.Path(file_name).stem: scapy.rdpcap(file_name) for file_name in args.capture_files
     }
 
     # check loaded packet lists
@@ -32,16 +84,24 @@ else:
 
         print(f"Process capture file {name}")
 
+        target_layer_class = (
+            scapy.TCP
+            if args.ip_proto == "tcp"
+            else scapy.UDP
+            if args.ip_proto == "udp"
+            else scapy.ICMP
+        )
+
         # build table (DataFrame) with a row per packet
         # each row contains packet capture time and payload size
         pcap_df: pd.DataFrame = pd.DataFrame(
             [
                 (
                     int(p.time),  # rounding (by truncation) to integer
-                    len(p.getlayer(scapy.UDP).payload) * 8,  # in bits
+                    len(p.getlayer(target_layer_class).payload) * 8 if args.metric == "bps" else 1,
                 )
                 for p in packet_list
-                if p.haslayer(scapy.UDP)
+                if p.haslayer(target_layer_class)
             ],
             columns=["time", name],
         )
@@ -52,13 +112,17 @@ else:
         # compute data rate by grouping rows by time, summing the sizes
         pcap_df = pcap_df.groupby(pcap_df["time"]).aggregate({"time": "first", name: sum})
 
-        # normalize (choose appropriate method)
-        # TODO only normalize if required
-        pcap_df[name] = pcap_df[name].div(pcap_df[name].max())
-        # pcap_df[name] = (pcap_df[name] - pcap_df[name].mean()) / pcap_df[name].std()
-        # pcap_df[name] = (pcap_df[name] - pcap_df[name].min()) / (
-        #     pcap_df[name].max() - pcap_df[name].min()
-        # )
+        # normalize with appropriate method if required
+        if args.normalization == "none":
+            pass
+        elif args.normalization == "pseudo":
+            pcap_df[name] = pcap_df[name].div(pcap_df[name].max())
+        elif args.normalization == "min-max":
+            pcap_df[name] = (pcap_df[name] - pcap_df[name].min()) / (
+                pcap_df[name].max() - pcap_df[name].min()
+            )
+        elif args.normalization == "z-score":
+            pcap_df[name] = (pcap_df[name] - pcap_df[name].mean()) / pcap_df[name].std()
 
         # set time as index
         pcap_df.set_index("time", inplace=True)
@@ -92,12 +156,15 @@ fig, fig_ax = plt.subplots()
 
 # plot lines
 plot_ax = overall_df.plot.line(
-    use_index=True, xlabel="Time [s]", ylabel="Data rate [normalized to 1]", legend=False
+    use_index=True,
+    xlabel="Time [s]",
+    ylabel="Data rate [normalized to 1]" if args.metric == "bps" else "Packet rate [pps]",
+    legend=False,
 )
 
 # adjust markers and line styles
 markers = [".", "+", "x", "o", "v", "^", "<", ">", "8", "s", "p", "*", "h", "H", "D", "d", "P", "X"]
-linestyles = ["-", "--", ":", "-.", "-", "--", "-.", ":", "-", "--", "-.", ":"]
+linestyles = ["-", "--", ":", "-."]
 for line, marker, linestyle in zip(plot_ax.get_lines(), markers, linestyles):
     line.set_marker(marker)
     line.set_linestyle(linestyle)
@@ -106,7 +173,6 @@ for line, marker, linestyle in zip(plot_ax.get_lines(), markers, linestyles):
 plot_ax.legend()
 
 # save the figure as pdf
-plt.savefig(str(pathlib.Path(__file__).parent.joinpath("tmp_plot.pdf")), bbox_inches="tight")
+plt.savefig(args.output_file, bbox_inches="tight")
 
-# TODO if __name__ == "__main__"
-# TODO argparse: input and output file name(s), filters, payload to be considered
+# TODO if __name__ == "__main__": ...
