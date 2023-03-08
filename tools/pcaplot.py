@@ -158,7 +158,7 @@ fig, fig_ax = plt.subplots()
 plot_ax = overall_df.plot.line(
     use_index=True,
     xlabel="Time [s]",
-    ylabel="Data rate [normalized to 1]" if args.metric == "bps" else "Packet rate [pps]",
+    ylabel="Data rate [bps]" if args.metric == "bps" else "Packet rate [pps]",
     legend=False,
 )
 
