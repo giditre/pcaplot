@@ -40,7 +40,7 @@ parser.add_argument(
     "-n",
     "--normalization",
     help="Data normalization method, default: %(default)s",
-    choices=["none", "pseudo", "min-max", "z-score"],
+    choices=["none", "pseudo", "minmax", "zscore"],
     nargs="?",
     default="none",
 )
